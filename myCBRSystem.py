@@ -8,16 +8,17 @@ from fastdtw import fastdtw
 
 from scipy.spatial.distance import euclidean
 
+import pytwed
+
 from aeon.distances import msm_distance
 
 from scipy.fft import fft, fftfreq
 
 
-# creat a something to associate color with a value: blue 0, red 1, green 2
-
 class TimeSeriesSimFun(Enum):
     DTW = 1
     MSM = 2
+    TWE = 3
 
 class TimeModifier(Enum):
     NONE = 0
@@ -100,6 +101,8 @@ class myCBRSystem:
                     distance, _ = fastdtw(x, y, dist=euclidean)
                 case TimeSeriesSimFun.MSM:
                     distance = msm_distance(x, y)
+                case TimeSeriesSimFun.TWE:
+                    distance = pytwed.twed(x[0], y[0], x[1], y[1], nu = 0.001, lmbda = 1.0, p = 2, fast=True)
                 case _:
                     print("Time series similarity not set")
                     print(self.time_representation_func)
@@ -174,13 +177,16 @@ class myCBRSystem:
                     case _:
                         raise ValueError("Time modifier not set")
 
-                # for each value create a tuple (time, value)
-                if self.time_representation_func == TimeSeriesSimFun.DTW:
-                    time_series1 = [(time, value) for time, value in zip(timeline1, value1)]
-                    time_series2 = [(time, value) for time, value in zip(timeline2, value2)]
-                elif self.time_representation_func == TimeSeriesSimFun.MSM:
-                    time_series1 = np.array([timeline1, value1])
-                    time_series2 = np.array([timeline2, value2])
+                match self.time_representation_func:
+                    case TimeSeriesSimFun.DTW:
+                        time_series1 = [(time, value) for time, value in zip(timeline1, value1)]
+                        time_series2 = [(time, value) for time, value in zip(timeline2, value2)]
+                    case TimeSeriesSimFun.MSM:
+                        time_series1 = np.array([timeline1, value1])
+                        time_series2 = np.array([timeline2, value2])
+                    case TimeSeriesSimFun.TWE:
+                        time_series1 = [np.array(value1).astype('float64').reshape(-1, 1), timeline1]
+                        time_series2 = [np.array(value2).astype('float64').reshape(-1, 1), timeline2]
 
                 return time_series1, time_series2
             else:
@@ -222,14 +228,17 @@ class myCBRSystem:
         similarity = pd.Series()
         total = 0
 
-        if case1['case_id'] == case2['case_id']:
-            return pd.Series([0, case1['case_id'], case2['case_id']], index=['total', 'org_id', 'case_id'])
 
 
         for value1, value2, column in zip(case1, case2, case1.index):
             if column == 'case_id' or self.weights[column] == 0:
                 similarity[column] = None
                 continue
+            if case1['case_id'] == case2['case_id']:
+                similarity[column] = self.weights[column]
+                total += self.weights[column]
+                continue
+
             # similarity += self.weights[column] * (self.similarity_funct[column])(value1, value2, column)
             try:
                 if self.similarity_funct[column].__name__ == 'time_series_similarity':
@@ -297,7 +306,7 @@ class myCBRSystem:
     def set_weight(self, column, weight):
         self.weights[column] = weight
 
-    def set_weights(self, weights, autofill: bool=False):
+    def set_weights(self, weights: dict, autofill: bool=False):
         if autofill:
             for column in self.case_base.columns:
                 if column not in weights:
